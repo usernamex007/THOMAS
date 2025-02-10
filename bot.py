@@ -1,4 +1,4 @@
-from telethon import TelegramClient, events, Button
+from telethon import TelegramClient, events, functions, types
 from telethon.sessions import StringSession
 import logging
 import config
@@ -22,9 +22,12 @@ async def start_sessions():
         except Exception as e:
             logging.error(f"❌ Error starting session: {e}")
 
+# Dictionary to store pending reports
+pending_reports = {}
+
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    await event.reply("👋 **Welcome to Mass Report Bot!**\nUse `/report @username spam` to report.")
+    await event.reply("👋 **Welcome to Mass Report Bot!**\nUse `/report @username spam` or `/report @channel spam` to report.")
 
 @bot.on(events.NewMessage(pattern="/help"))
 async def help(event):
@@ -38,41 +41,81 @@ async def help(event):
 async def report(event):
     args = event.text.split()
     if len(args) < 3:
-        return await event.reply("⚠️ Usage: `/report @username reason`")
+        return await event.reply("⚠️ Usage: `/report @username reason` or `/report @channel reason`")
     
-    target = args[1]  # Username or ID
+    target = args[1]  # Username, Channel, or ID
     reason_text = args[2].lower()
 
     # Mapping Report Reasons
     reasons = {
-        "spam": "Spam",
-        "violence": "Violence",
-        "scam": "Scam",
-        "child": "Child Abuse",
-        "illegal": "Illegal Content",
-        "terrorism": "Terrorism",
-        "copyright": "Copyright Violation"
+        "spam": types.InputReportReasonSpam(),
+        "violence": types.InputReportReasonViolence(),
+        "scam": types.InputReportReasonScam(),
+        "child": types.InputReportReasonChildAbuse(),
+        "illegal": types.InputReportReasonIllegalDrugs(),
+        "terrorism": types.InputReportReasonTerrorism(),
+        "copyright": types.InputReportReasonCopyright()
     }
 
     if reason_text not in reasons:
         return await event.reply("⚠️ Invalid reason! Use: spam, violence, scam, child, illegal, terrorism, copyright")
 
-    reason = reasons[reason_text]
-    success_count = 0
-    failed_count = 0
+    # Save the pending report request
+    pending_reports[event.sender_id] = {"target": target, "reason": reasons[reason_text]}
 
-    # Report using all sessions
-    for client in session_clients:
+    await event.reply("📝 **How many reports do you want to send?**\nReply with a number (e.g., `10`).")
+
+@bot.on(events.NewMessage())
+async def report_count(event):
+    if event.sender_id in pending_reports:
         try:
-            entity = await client.get_entity(target)
-            await client.report_spam(entity)  # Reporting as spam
-            success_count += 1
-            logging.info(f"✅ Reported {target} for {reason}")
-        except Exception as e:
-            failed_count += 1
-            logging.error(f"❌ Error reporting {target}: {e}")
+            count = int(event.raw_text.strip())
 
-    await event.reply(f"✅ {success_count} reports sent, ❌ {failed_count} failed.")
+            if count <= 0 or count > len(session_clients):
+                return await event.reply(f"⚠️ Invalid number! Choose between `1` and `{len(session_clients)}`.")
+
+            data = pending_reports.pop(event.sender_id)
+            target, reason = data["target"], data["reason"]
+
+            success_count = 0
+            failed_count = 0
+
+            # Report using limited sessions based on user input
+            for i in range(count):
+                client = session_clients[i]
+                try:
+                    entity = await client.get_entity(target)
+                    
+                    # अगर टारगेट चैनल या ग्रुप है तो पहले जॉइन करें और फिर रिपोर्ट करें
+                    if entity.broadcast or entity.megagroup:
+                        try:
+                            await client(functions.channels.JoinChannelRequest(entity))
+                            logging.info(f"✅ Joined Channel/Group: {target}")
+                        except Exception as join_error:
+                            logging.warning(f"⚠️ Unable to join {target}: {join_error}")
+
+                        await client(functions.account.ReportPeerRequest(
+                            peer=entity,
+                            reason=reason,
+                            message="Reported for violating Telegram rules."
+                        ))
+                        logging.info(f"✅ Reported Channel/Group {target}")
+                    
+                    # अगर टारगेट यूज़र है तो उसे रिपोर्ट करें
+                    else:
+                        await client.report_spam(entity)
+                        logging.info(f"✅ Reported User {target}")
+
+                    success_count += 1
+                    
+                except Exception as e:
+                    failed_count += 1
+                    logging.error(f"❌ Error reporting {target}: {e}")
+
+            await event.reply(f"✅ {success_count} reports sent, ❌ {failed_count} failed.")
+
+        except ValueError:
+            await event.reply("⚠️ Please enter a valid number.")
 
 @bot.on(events.NewMessage(pattern="/addsession"))
 async def add_session(event):
