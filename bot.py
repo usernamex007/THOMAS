@@ -16,8 +16,11 @@ for session in config.SESSION_STRINGS:
 
 async def start_sessions():
     for client in session_clients:
-        await client.start()
-        logging.info(f"Started session: {client.session.filename}")
+        try:
+            await client.start()
+            logging.info("✅ Started a new session successfully!")
+        except Exception as e:
+            logging.error(f"❌ Error starting session: {e}")
 
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
@@ -55,17 +58,21 @@ async def report(event):
         return await event.reply("⚠️ Invalid reason! Use: spam, violence, scam, child, illegal, terrorism, copyright")
 
     reason = reasons[reason_text]
+    success_count = 0
+    failed_count = 0
 
     # Report using all sessions
     for client in session_clients:
         try:
             entity = await client.get_entity(target)
-            await client.report(entity, reason=reason)
-            logging.info(f"Reported {target} for {reason}")
+            await client.report_spam(entity)  # Reporting as spam
+            success_count += 1
+            logging.info(f"✅ Reported {target} for {reason}")
         except Exception as e:
-            logging.error(f"Error reporting {target}: {e}")
+            failed_count += 1
+            logging.error(f"❌ Error reporting {target}: {e}")
 
-    await event.reply(f"✅ Successfully reported {target} for {reason}!")
+    await event.reply(f"✅ {success_count} reports sent, ❌ {failed_count} failed.")
 
 @bot.on(events.NewMessage(pattern="/addsession"))
 async def add_session(event):
@@ -73,10 +80,20 @@ async def add_session(event):
 
 @bot.on(events.NewMessage())
 async def new_session(event):
-    if "1" in event.raw_text:  # Placeholder to filter session strings
+    if len(event.raw_text) > 20:  # Basic check for session string
         new_session = event.raw_text.strip()
-        session_clients.append(TelegramClient(StringSession(new_session), config.API_ID, config.API_HASH))
-        await event.reply("✅ New session added successfully!")
+        try:
+            client = TelegramClient(StringSession(new_session), config.API_ID, config.API_HASH)
+            await client.connect()
+            if await client.is_user_authorized():
+                session_clients.append(client)
+                await event.reply("✅ New session added successfully!")
+                logging.info("✅ New session added successfully!")
+            else:
+                await event.reply("⚠️ Invalid session string. Please try again.")
+        except Exception as e:
+            await event.reply("❌ Error adding session. Check logs for details.")
+            logging.error(f"❌ Error adding session: {e}")
 
 # Start bot and user clients
 with bot:
