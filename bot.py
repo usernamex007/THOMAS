@@ -1,4 +1,5 @@
 from telethon import TelegramClient, events, Button
+from telethon.sessions import StringSession
 import logging
 import config
 
