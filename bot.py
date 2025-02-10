@@ -2,6 +2,13 @@ from telethon import TelegramClient, events, functions, types
 from telethon.sessions import StringSession
 import logging
 import config
+from telethon.tl.types import (
+    InputReportReasonSpam, 
+    InputReportReasonViolence, 
+    InputReportReasonPornography, 
+    InputReportReasonChildAbuse, 
+    InputReportReasonOther
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -48,14 +55,14 @@ async def report(event):
 
     # Mapping Report Reasons
     reasons = {
-        "spam": types.InputReportReasonSpam(),
-        "violence": types.InputReportReasonViolence(),
-        "scam": types.InputReportReasonScam(),
-        "child": types.InputReportReasonChildAbuse(),
-        "illegal": types.InputReportReasonIllegalDrugs(),
-        "terrorism": types.InputReportReasonTerrorism(),
-        "copyright": types.InputReportReasonCopyright()
-    }
+    "spam": InputReportReasonSpam(),
+    "violence": InputReportReasonViolence(),
+    "scam": InputReportReasonOther(),  # यहाँ `InputReportReasonScam()` को हटाया गया है
+    "child": InputReportReasonChildAbuse(),
+    "illegal": InputReportReasonOther(),
+    "terrorism": InputReportReasonOther(),
+    "copyright": InputReportReasonOther()
+}
 
     if reason_text not in reasons:
         return await event.reply("⚠️ Invalid reason! Use: spam, violence, scam, child, illegal, terrorism, copyright")
