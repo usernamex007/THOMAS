@@ -8,14 +8,14 @@ import config
 
 logging.basicConfig(level=logging.INFO)
 
-# Bot Client
 bot = TelegramClient("report_bot", config.API_ID, config.API_HASH).start(bot_token=config.BOT_TOKEN)
 
-# User Clients (Mass Reporting Accounts)
 session_clients = []
 for session in config.SESSION_STRINGS:
     client = TelegramClient(StringSession(session), config.API_ID, config.API_HASH)
     session_clients.append(client)
+
+active_reports = {}
 
 async def start_sessions():
     for client in session_clients:
@@ -27,17 +27,13 @@ async def start_sessions():
 
 @bot.on(events.NewMessage(pattern="/csession"))
 async def check_sessions(event):
-    active_sessions = 0
-    for client in session_clients:
-        if await client.is_user_authorized():
-            active_sessions += 1
-
+    active_sessions = sum(1 for client in session_clients if await client.is_user_authorized())
     total_sessions = len(session_clients)
     await event.reply(f"📌 **Total Sessions:** {total_sessions}\n✅ **Active Sessions:** {active_sessions}")
 
 @bot.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    await event.reply("👋 **Welcome to Mass Report Bot!**\nUse `/reportuser @username spam` or `/reportchannel @channel spam` to report.")
+    await event.reply("👋 **Welcome to Mass Report Bot!**\nUse /reportuser @username spam or /reportchannel @channel spam to report.")
 
 @bot.on(events.NewMessage(pattern="/help"))
 async def help(event):
@@ -48,64 +44,58 @@ async def help(event):
     help_text += "/csession – Check active sessions"
     await event.reply(help_text)
 
-@bot.on(events.NewMessage(pattern=r"/report(user|channel)\s+(@\w+|\d+)\s+(\w+)"))
+@bot.on(events.NewMessage(pattern=r"/report(user|channel)\s+(@\w+|\d+)"))
 async def report(event):
     args = event.text.split()
-    if len(args) < 3:
+    if len(args) < 2:
         return await event.reply("⚠️ Usage: `/reportuser @username spam` or `/reportchannel @channel spam`")
-    
-    report_type = args[0]  # /reportuser या /reportchannel
-    target = args[1]  # Username, Channel, या ID
-    reason_text = args[2].lower()
 
-    reasons = {
-        "spam": InputReportReasonSpam(),
-        "scam": InputReportReasonSpam(),
-        "violence": InputReportReasonSpam(),
-        "child": InputReportReasonSpam(),
-        "illegal": InputReportReasonSpam(),
-        "terrorism": InputReportReasonSpam(),
-        "copyright": InputReportReasonSpam()
-    }
+    report_type = args[0]  
+    target = args[1]  
 
-    if reason_text not in reasons:
-        return await event.reply("⚠️ Invalid reason! Use: spam, violence, scam, child, illegal, terrorism, copyright")
+    await event.reply("📌 How many reports do you want to send? (1-100) Please enter a number.")
+    active_reports[event.sender_id] = (report_type, target)
 
-    reason = reasons[reason_text]
-
-    await event.reply("📌 कितनी रिपोर्ट मारनी हैं? (1-100) कृपया संख्या भेजें।")
-
-    count_msg = await bot.wait_for(events.NewMessage(from_users=event.sender_id), timeout=30)
-    try:
-        report_count = int(count_msg.text)
-        if report_count < 1 or report_count > 100:
-            return await event.reply("⚠️ कृपया 1 से 100 के बीच कोई संख्या दर्ज करें।")
-    except ValueError:
-        return await event.reply("⚠️ कृपया सही संख्या भेजें।")
-
-    success_count, failed_count = 0, 0
-
-    for client in session_clients:
+@bot.on(events.NewMessage())
+async def handle_report_count(event):
+    if event.sender_id in active_reports:
         try:
-            entity = await client.get_entity(target)
+            report_type, target = active_reports[event.sender_id]
+            report_count = int(event.raw_text.strip())
 
-            if report_type == "/reportchannel":
+            if report_count < 1 or report_count > 100:
+                return await event.reply("⚠️ Please enter a number between 1 and 100.")
+
+            reasons = {"spam": InputReportReasonSpam()}
+            reason = reasons["spam"]
+
+            success_count, failed_count = 0, 0
+
+            for client in session_clients:
                 try:
-                    await client(JoinChannelRequest(entity))
-                    logging.info(f"✅ Joined {target} before reporting")
+                    entity = await client.get_entity(target)
+
+                    if report_type == "/reportchannel":
+                        try:
+                            await client(JoinChannelRequest(entity))
+                            logging.info(f"✅ Joined {target} before reporting")
+                        except Exception:
+                            pass
+
+                    for _ in range(report_count):
+                        await client(ReportPeerRequest(peer=entity, reason=reason, message="Reported for spam"))
+                        success_count += 1
+                        logging.info(f"✅ Reported {target}")
+
                 except Exception as e:
-                    logging.warning(f"⚠️ Unable to join {target}: {e}")
+                    failed_count += 1
+                    logging.error(f"❌ Error reporting {target}: {e}")
 
-            for _ in range(report_count):
-                await client(ReportPeerRequest(peer=entity, reason=reason, message=f"Reported for {reason_text}"))
-                success_count += 1
-                logging.info(f"✅ Reported {target} for {reason_text}")
+            await event.reply(f"✅ {success_count} reports sent, ❌ {failed_count} failed.")
+            del active_reports[event.sender_id]
 
-        except Exception as e:
-            failed_count += 1
-            logging.error(f"❌ Error reporting {target}: {e}")
-
-    await event.reply(f"✅ {success_count} reports sent, ❌ {failed_count} failed.")
+        except ValueError:
+            await event.reply("⚠️ Please enter a valid number.")
 
 @bot.on(events.NewMessage(pattern="/addsession"))
 async def add_session(event):
@@ -128,7 +118,6 @@ async def new_session(event):
             await event.reply("❌ Error adding session. Check logs for details.")
             logging.error(f"❌ Error adding session: {e}")
 
-# Start bot and user clients
 with bot:
     bot.loop.run_until_complete(start_sessions())
     bot.run_until_disconnected()
